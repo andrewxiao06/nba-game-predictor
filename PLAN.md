@@ -1,4 +1,4 @@
-# NBA Championship Predictor — Project Plan
+# NBA Game Predictor — Project Plan
 
 ## Table of Contents
 
@@ -24,18 +24,28 @@
 
 A game-level NBA win probability predictor. Given two teams playing tonight, the model outputs a calibrated win probability for each team. Results are displayed on a deployed dashboard.
 
+Two learning goals sit alongside the modeling goal: (1) apply real ML concepts
+(leakage-safe splits, calibration, interpretability) and be able to defend every
+data/modeling decision in an interview, and (2) practice SQL — raw SQL, not an
+ORM — as the storage/query layer feeding the pipeline.
+
 ### What This Is Not
 
 - Not a real-time system. Data is fetched manually by running a script.
 - Not a betting tool. Model will not beat Vegas lines — that is expected and documented.
-- Not a championship simulator. Predicts individual game outcomes, not series or season winners.
+- Not a championship or series simulator. Predicts individual game outcomes only.
 - Not an automated pipeline. No schedulers, no cron jobs, no webhooks.
+- Not an ORM project. SQL is written by hand (`sqlite3`) so every query is
+  something you can explain line by line — SQLAlchemy is deliberately not used.
 
 ### Explicit Constraints
 
 - Data refresh: manual. Run `fetch_games.py` before each prediction session.
 - Model retraining: manual. Run `train.py` at the start of each new season.
-- Infrastructure: minimal. CSV files for data, flat file model serialization, single FastAPI endpoint.
+- Infrastructure: minimal. SQLite for storage, flat file model serialization, single FastAPI endpoint.
+- SQL: raw `sqlite3`, no ORM. If asked "why not an ORM," the honest answer is:
+  this project is small enough that an ORM would hide the SQL you're here to
+  practice, and there's no team of developers to protect from raw queries.
 - Target users: portfolio reviewers and yourself.
 
 ### Success Criteria
@@ -51,15 +61,17 @@ A game-level NBA win probability predictor. Given two teams playing tonight, the
 ## 2. Architecture & File Structure
 
 ```
-NBA-Championship-Predictor/
+nba-game-predictor/
 │
 ├── data/
 │   ├── raw/
-│   │   ├── games_raw.csv          # Historical games 2015-16 to 2024-25
-│   │   └── games_current.csv      # Current season 2025-26 (prediction input)
+│   │   ├── games_raw.csv          # Historical team-game rows 2015-16 to 2024-25
+│   │   ├── games_current.csv      # Current season 2025-26 (prediction input)
+│   │   └── player_boxscores_raw.csv  # Historical player-game box scores
+│   ├── db/
+│   │   └── nba.db                 # SQLite database — raw + cleaned tables live here
 │   └── processed/
-│       ├── games_clean.csv        # Cleaned, normalized game records
-│       └── features.csv           # Engineered features ready for modeling
+│       └── features.csv           # Engineered features ready for modeling (exported from SQL)
 │
 ├── models/
 │   ├── xgboost_model.pkl          # Serialized trained model
@@ -70,9 +82,13 @@ NBA-Championship-Predictor/
 │
 ├── src/
 │   ├── data/
-│   │   ├── fetch_games.py         # Pulls raw data from nba_api
-│   │   ├── clean.py               # Cleans and normalizes raw data
-│   │   └── features.py            # Engineers features from clean data
+│   │   ├── fetch_games.py         # Pulls team-game box scores from nba_api
+│   │   ├── fetch_players.py       # Pulls player-game box scores from nba_api
+│   │   ├── schema.sql             # CREATE TABLE statements for nba.db
+│   │   ├── load_db.py             # Loads raw CSVs into SQLite tables (no ORM)
+│   │   ├── clean.sql              # SQL: dedupe games, normalize, add home/away flag
+│   │   └── features.sql           # SQL: rolling averages, rest days, player aggregates,
+│   │                               #      joined into one row per game, exported to features.csv
 │   │
 │   ├── model/
 │   │   ├── train.py               # Trains XGBoost model + calibrator
@@ -90,8 +106,8 @@ NBA-Championship-Predictor/
 │       └── CalibrationChart.js    # Calibration curve visualization
 │
 ├── tests/
-│   ├── test_clean.py              # Unit tests for cleaning logic
-│   ├── test_features.py           # Unit tests for feature engineering
+│   ├── test_load_db.py            # Unit tests for CSV → SQLite loading
+│   ├── test_features.py           # Unit tests for feature engineering (query output shape)
 │   └── test_predict.py            # Unit tests for prediction output shape/range
 │
 ├── docs/
@@ -101,7 +117,7 @@ NBA-Championship-Predictor/
 ├── README.md                      # Public-facing project summary
 ├── requirements.txt               # Python dependencies
 ├── .env.example                   # Environment variable template (never commit .env)
-└── .gitignore                     # Excludes data/, models/, .env, __pycache__
+└── .gitignore                     # Excludes data/ (including nba.db), models/, .env, __pycache__
 ```
 
 ---
@@ -111,7 +127,8 @@ NBA-Championship-Predictor/
 | Layer            | Tool                                 | Why                                                             |
 | ---------------- | ------------------------------------ | --------------------------------------------------------------- |
 | Data fetching    | `nba_api`                            | Unofficial but well-maintained Python wrapper for NBA Stats API |
-| Data processing  | `pandas`                             | Standard for tabular data manipulation                          |
+| Storage & query  | `sqlite3` (stdlib, no ORM)           | Real SQL practice — joins/aggregation live in SQL, not pandas. SQLite needs no server, matches this project's minimal-infra rule. |
+| Data processing  | `pandas`                             | Feature engineering on top of SQL query results — standard for tabular data manipulation |
 | Modeling         | `xgboost`                            | Fast, interpretable, industry-standard for tabular data         |
 | Calibration      | `scikit-learn` (isotonic regression) | Corrects probability output to be statistically trustworthy     |
 | Interpretability | `shap`                               | Explains which features drive each prediction                   |
@@ -144,34 +161,65 @@ NBA-Championship-Predictor/
 - `SEASON_ID` prefix `4` means playoffs. Filter these out of training or handle separately.
 - `MATCHUP` with `vs.` = home team. `@` = away team. Use this to engineer home/away feature.
 
+### player_boxscores_raw.csv (from nba_api)
+
+| Column      | Type  | Description                                      |
+| ----------- | ----- | ------------------------------------------------- |
+| GAME_ID     | str   | Joins to games_raw.GAME_ID                        |
+| TEAM_ID     | int   | Joins to games_raw.TEAM_ID                         |
+| PLAYER_ID   | int   | NBA's internal player identifier                  |
+| PLAYER_NAME | str   | Player full name                                  |
+| MIN         | float | Minutes played (NaN/0 if did not play — DNP)      |
+| PTS, REB, AST | float | Box score stats for this player in this game    |
+| STARTER     | bool  | Whether this player started the game (from lineup) |
+
+### SQLite Schema (`data/db/nba.db`)
+
+| Table              | Grain                  | Source                        |
+| ------------------ | ----------------------- | ------------------------------ |
+| `games`             | one row per team-game   | loaded from `games_raw.csv` + `games_current.csv` |
+| `player_boxscores`  | one row per player-game | loaded from `player_boxscores_raw.csv` |
+
+`clean.sql` and `features.sql` query these two tables — e.g. joining
+`player_boxscores` back to `games` to compute "were this team's top-5
+minutes players (by season-to-date average) available for this game."
+This is the concrete SQL story: real joins and aggregations, not just a
+`SELECT *`.
+
 ---
 
 ## 5. Milestone Roadmap
 
-### Week 1 — Data Pipeline ✅ IN PROGRESS
+### Week 1 — Data Pipeline & SQL Setup ✅ DONE
 
 - [x] Install `nba_api`, `pandas`
 - [x] Fetch historical games 2015-16 to 2024-25 → `games_raw.csv`
-- [x] Fetch current season 2025-26 → `games_current.csv`
-- [x] Write `clean.py` — handle nulls, normalize columns, deduplicate games, add home/away flag
+- [x] Fetch current season 2025-26 → `games_current.csv` (rerun before next prediction session — see B13)
+- [x] Write `fetch_players.py` / `fetch_players_current.py` — pull player-game box scores from `nba_api` via `LeagueGameLog(player_or_team='P')` → `player_boxscores_raw.csv` / `player_boxscores_current.csv`. No `STARTER` flag (see B14) — availability is inferred from `MIN` instead.
+- [x] Write `schema.sql` — `games` and `player_boxscores` table definitions
+- [x] Write `load_db.py` — loads the raw CSVs into `data/db/nba.db` using `sqlite3` (no ORM)
+- [x] Rewrite cleaning logic as `clean.sql` — dedupe games, normalize columns, add home/away flag (was `clean.py`; the CSV-only version is superseded by the SQL view `games_clean`)
+- [x] Moved all data scripts into `src/data/` per the architecture in §2
 - [ ] Verify: no duplicate GAME_IDs, WL column is complete, GAME_DATE parses correctly
 
-**Exit criteria:** `games_clean.csv` exists, loads without errors, has one row per team per game, no nulls in key columns.
+**Exit criteria:** `nba.db` exists with populated `games` and `player_boxscores` tables. `clean.sql` runs and produces a deduplicated, one-row-per-team-game view with no nulls in key columns.
 
 ### Week 2 — Feature Engineering
 
-- [ ] Write `features.py`
-- [ ] Rolling 10-game averages per team (PTS, REB, AST, FG_PCT, PLUS_MINUS)
-- [ ] Rest days feature (days since last game per team)
-- [ ] Home/away binary flag
-- [ ] Player availability flag (approximate from box score: did starters play? check MIN)
-- [ ] Season-based train/val/test split:
-  - Train: 2015-16 to 2021-22
-  - Val: 2022-23
-  - Test: 2023-24 to 2024-25
+- [ ] Write `features.sql` — the SQL side of feature engineering:
+  - Join `player_boxscores` to `games` to compute team-level player-availability aggregates (e.g. were the team's top-5 minutes players available this game)
+  - Produce one row per team-game with the raw columns needed for rolling calculations
+- [ ] Write `features.py` — pandas side, reading `features.sql`'s output:
+  - Rolling 10-game averages per team (PTS, REB, AST, FG_PCT, PLUS_MINUS)
+  - Rest days feature (days since last game per team)
+  - Home/away binary flag
+  - Season-based train/val/test split:
+    - Train: 2015-16 to 2021-22
+    - Val: 2022-23
+    - Test: 2023-24 to 2024-25
 - [ ] **NEVER random split across games — this causes data leakage**
 
-**Exit criteria:** `features.csv` exists. Train/val/test row counts verified. No future data leaks into training set.
+**Exit criteria:** `features.csv` exists, includes player-availability features. Train/val/test row counts verified. No future data leaks into training set. You can explain in plain English what each SQL query does and why it's in SQL rather than pandas (or vice versa).
 
 ### Week 3 — Baseline Model
 
@@ -246,13 +294,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 2. Fetch data (run manually when you want fresh data)
-python src/data/fetch_games.py        # historical
+python src/data/fetch_games.py        # historical team box scores
+python src/data/fetch_players.py      # historical player box scores
 python src/data/fetch_current.py      # current season
 
-# 3. Clean data
-python src/data/clean.py
+# 3. Load into SQLite and clean
+python src/data/load_db.py            # CSVs -> data/db/nba.db
+sqlite3 data/db/nba.db < src/data/clean.sql
 
-# 4. Engineer features
+# 4. Engineer features (SQL then pandas)
+sqlite3 data/db/nba.db < src/data/features.sql
 python src/data/features.py
 
 # 5. Train model
@@ -290,8 +341,11 @@ These are confirmed issues you will hit. Read before starting each phase.
 | B02 | `SEASON_ID` prefix `4` = playoffs, `2` = regular season          | Mixing playoff and regular season games confuses rolling averages | Filter by SEASON_ID prefix before computing rolling features                |
 | B03 | `nba_api` rate limits — too many requests causes silent failures | Missing seasons in your dataset                                   | `time.sleep(1)` between every API call. Verify row counts after each fetch. |
 | B04 | Rolling averages at season start have insufficient history       | First ~10 games of each season have NaN features                  | Drop rows where rolling window is incomplete OR fill with season average    |
-| B05 | Player availability from box score is approximate                | Feature is noisy                                                  | Flag it as approximate in docs. Don't over-rely on it.                      |
+| B05 | Player availability from box score is approximate (DNP vs. genuine injury look the same) | Feature is noisy                                | Flag it as approximate in docs. Don't over-rely on it.                      |
 | B06 | Current season (2025-26) only has completed games                | Tonight's game won't be in the data                               | Re-run `fetch_current.py` before each prediction session                    |
+| B12 | SQLite writes lock the whole DB file (no row-level locking)      | Concurrent `load_db.py` + query scripts can fail with "database is locked" | Run data loading and querying steps sequentially, never in parallel processes |
+| B13 | `games_current.csv` is fetched once and goes stale (e.g. only had Finals Game 1 for weeks after the series continued) | Feature/prediction input misses recent games | Rerun `fetch_current.py` + `fetch_players_current.py` before each prediction session, not just once |
+| B14 | `player_boxscores` has no `STARTER`/lineup flag — `LeagueGameLog` doesn't return one, and getting it needs a boxscore call per game (~13k+ requests) | "Was this team's top player available" can only be approximated from `MIN`, not a real starter/injury signal | Documented scope decision for v1: infer availability from `MIN` (0/NULL = did not play). Revisit if this proves too noisy. |
 
 ### Model Layer
 
@@ -331,15 +385,16 @@ Template for new bugs:
 
 These are ideas that are explicitly OUT OF SCOPE for v1. Do not build these until Weeks 1-8 are complete and deployed.
 
-| Feature                           | Why it's interesting                    | Why it's deferred                                                 |
-| --------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
-| Automated data refresh (cron job) | Removes manual step                     | Adds infrastructure complexity, not needed for portfolio          |
-| LSTM / sequence model             | Captures game momentum                  | 60-hour budget doesn't support it without sacrificing calibration |
-| Injury report integration         | Biggest signal in NBA predictions       | Data is messy, unstructured, hard to get historically             |
-| Series outcome prediction         | More interesting target                 | Requires game-level model first                                   |
-| Monte Carlo playoff simulator     | Distribution output, not point estimate | Week 4+ complexity, build after v1                                |
-| User accounts / saved predictions | Product feature                         | This is a portfolio project, not a product                        |
-| Postgres database                 | Proper persistence                      | CSV files are sufficient for v1                                   |
+| Feature                                  | Why it's interesting                    | Why it's deferred                                                 |
+| ----------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
+| Automated data refresh (cron job)         | Removes manual step                     | Adds infrastructure complexity, not needed for portfolio          |
+| LSTM / sequence model                     | Captures game momentum                  | 60-hour budget doesn't support it without sacrificing calibration |
+| Real injury report integration (official injury status, not just DNP-from-box-score) | Biggest signal in NBA predictions | Data is messy, unstructured, hard to get historically; v1 uses the approximate box-score-derived availability flag instead |
+| Player-level modeling (players as model inputs, not team aggregates) | More granular signal | v1 uses player data only as team-level aggregates (availability, minutes); full player-level modeling is a bigger scope jump |
+| Series outcome prediction                 | More interesting target                 | Requires game-level model first                                   |
+| Monte Carlo playoff simulator             | Distribution output, not point estimate | Week 4+ complexity, build after v1                                |
+| User accounts / saved predictions         | Product feature                         | This is a portfolio project, not a product                        |
+| Postgres (upgrade from SQLite)            | Closer to a "real" production DB        | SQLite is sufficient for this data volume and needs no server — matches the minimal-infra rule |
 
 ---
 
@@ -347,9 +402,10 @@ These are ideas that are explicitly OUT OF SCOPE for v1. Do not build these unti
 
 ### File organization
 
-- One responsibility per file. `clean.py` cleans. `features.py` engineers features. They do not overlap.
+- One responsibility per file. `clean.sql` cleans. `features.sql`/`features.py` engineer features. They do not overlap.
 - No business logic in `main.py` (the API). It calls functions from other modules.
 - No hardcoded paths. Use a `config.py` or constants at the top of each file.
+- SQL lives in `.sql` files, not as strings embedded in `.py` files — keeps queries readable and diffable on their own.
 
 ### Python style
 
@@ -361,33 +417,45 @@ These are ideas that are explicitly OUT OF SCOPE for v1. Do not build these unti
 ### Example of what good code looks like in this project:
 
 ```python
-# src/data/clean.py
+# src/data/load_db.py
 
+import sqlite3
 import pandas as pd
 import logging
 from pathlib import Path
 
-RAW_PATH = Path("data/raw/games_raw.csv")
-CLEAN_PATH = Path("data/processed/games_clean.csv")
+RAW_GAMES_PATH = Path("data/raw/games_raw.csv")
+DB_PATH = Path("data/db/nba.db")
 
 logger = logging.getLogger(__name__)
 
-def load_raw(path: Path = RAW_PATH) -> pd.DataFrame:
-    """Load raw game data from CSV. Raises FileNotFoundError if missing."""
-    logger.info(f"Loading raw data from {path}")
+def load_games_csv(path: Path = RAW_GAMES_PATH) -> pd.DataFrame:
+    """Load raw team-game box scores from CSV. Raises FileNotFoundError if missing."""
+    logger.info(f"Loading raw games from {path}")
     return pd.read_csv(path)
 
-def deduplicate_games(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Raw data has two rows per game (one per team).
-    Keep home team row only, identified by 'vs.' in MATCHUP column.
-    """
-    return df[df["MATCHUP"].str.contains("vs.")].copy()
+def write_games_table(df: pd.DataFrame, db_path: Path = DB_PATH) -> None:
+    """Write raw team-game rows into the `games` table, replacing any existing data.
 
-def add_home_away_flag(df: pd.DataFrame) -> pd.DataFrame:
-    """Add IS_HOME column: 1 if home team, 0 if away."""
-    df["IS_HOME"] = df["MATCHUP"].str.contains("vs.").astype(int)
-    return df
+    Uses sqlite3 directly (no ORM) — pandas' to_sql is a thin wrapper over the
+    same driver, kept here rather than in features.py so all DB writes live in
+    one place.
+    """
+    with sqlite3.connect(db_path) as conn:
+        df.to_sql("games", conn, if_exists="replace", index=False)
+```
+
+```sql
+-- src/data/clean.sql
+-- Raw data has two rows per game (one per team). Keep the home-team row only,
+-- identified by 'vs.' in MATCHUP, and add an explicit IS_HOME flag.
+
+CREATE VIEW IF NOT EXISTS games_clean AS
+SELECT
+    *,
+    CASE WHEN MATCHUP LIKE '% vs. %' THEN 1 ELSE 0 END AS IS_HOME
+FROM games
+WHERE MATCHUP LIKE '% vs. %';
 ```
 
 ### Git discipline
@@ -453,6 +521,6 @@ If you're coming back after a break, do this in order:
 
 ---
 
-_Last updated: June 2026_
-_Current status: Week 1 — Data pipeline in progress_
-_Next action: Fetch 2025-26 current season data → `games_current.csv`_
+_Last updated: September 2026_
+_Current status: Re-planned to add SQLite (raw SQL, no ORM) as the storage/query layer and bring player box-score data into v1 scope. Week 1 in progress under the new architecture._
+_Next action: Write `schema.sql` and `load_db.py` to get `games_raw.csv`/`games_current.csv` into `data/db/nba.db`._
