@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 2230" role="img" aria-label="Architecture diagram: nba_api feeds two fetch scripts into raw CSVs, which load_db.py loads into SQLite; clean.sql and features.sql produce a features view via SQL joins and window functions; features.py in pandas does rolling windows and the train/val/test split, producing features.csv; train.py and evaluate.py (in progress) will produce a model, served by a planned FastAPI endpoint and Next.js dashboard.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+    </marker>
+    <style>
+      .node-title { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 13px; font-weight: 600; fill: #e7e5e0; }
+      .node-desc { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11px; fill: #9aa1ab; }
+      .edge-label { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 10.5px; fill: #9aa1ab; }
+      .title { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 21px; font-weight: 700; fill: #e7e5e0; }
+      .subtitle { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 13px; fill: #9aa1ab; }
+      .legend-text { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 12px; fill: #9aa1ab; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="2230" rx="12" fill="#0b0e12"/>
+
+  <!-- header -->
+  <text x="40" y="50" class="title">nba-game-predictor</text>
+  <text x="40" y="78" class="subtitle">Raw box scores flow from nba_api into SQLite, where hand-written SQL &#8212; not an ORM &#8212;</text>
+  <text x="40" y="96" class="subtitle">does the joins and window functions. Pandas only handles rolling windows and the split.</text>
+
+  <g>
+    <rect x="40" y="114" width="12" height="12" rx="3" fill="#16241c" stroke="#5fae7c" stroke-width="1.5"/>
+    <text x="60" y="124" class="legend-text">built</text>
+    <rect x="220" y="114" width="12" height="12" rx="3" fill="#241b12" stroke="#d9924a" stroke-width="1.5"/>
+    <text x="240" y="124" class="legend-text">in progress &#8212; week 3</text>
+    <rect x="430" y="114" width="12" height="12" rx="3" fill="none" stroke="#6b727c" stroke-dasharray="3 2" stroke-width="1.5"/>
+    <text x="450" y="124" class="legend-text">planned</text>
+  </g>
+
+  <g transform="translate(20,150)">
+
+    <!-- nba_api source -->
+    <g style="color:#6b727c">
+      <rect x="300" y="10" width="260" height="56" rx="8" fill="none" stroke="currentColor" stroke-dasharray="4 3" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="34" text-anchor="middle" class="node-title">nba_api</text>
+    <text x="430" y="52" text-anchor="middle" class="node-desc">unofficial NBA Stats API wrapper</text>
+
+    <line x1="380" y1="66" x2="240" y2="118" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="480" y1="66" x2="620" y2="118" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- fetch_games -->
+    <g style="color:#5fae7c">
+      <rect x="60" y="120" width="290" height="72" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="205" y="146" text-anchor="middle" class="node-title">fetch_games.py / fetch_current.py</text>
+    <text x="205" y="164" text-anchor="middle" class="node-desc">team-game box scores, all seasons</text>
+    <text x="205" y="180" text-anchor="middle" class="node-desc">1s sleep between calls &#8212; B03</text>
+
+    <!-- fetch_players -->
+    <g style="color:#5fae7c">
+      <rect x="510" y="120" width="290" height="72" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="655" y="146" text-anchor="middle" class="node-title">fetch_players.py / fetch_players_current.py</text>
+    <text x="655" y="164" text-anchor="middle" class="node-desc">player-game box scores</text>
+    <text x="655" y="180" text-anchor="middle" class="node-desc">MIN used to infer availability &#8212; B14</text>
+
+    <line x1="205" y1="192" x2="380" y2="260" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <line x1="655" y1="192" x2="480" y2="260" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <g style="color:#5fae7c">
+      <rect x="255" y="262" width="350" height="60" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="286" text-anchor="middle" class="node-title">data/raw/*.csv</text>
+    <text x="430" y="304" text-anchor="middle" class="node-desc">games_raw, player_boxscores_raw, +current-season variants</text>
+
+    <line x1="430" y1="322" x2="430" y2="374" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="322" y="330" width="216" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="346" text-anchor="middle" class="edge-label">df.to_sql(if_exists='replace')</text>
+
+    <!-- load_db.py -->
+    <g style="color:#5fae7c">
+      <rect x="280" y="376" width="300" height="58" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="400" text-anchor="middle" class="node-title">load_db.py</text>
+    <text x="430" y="418" text-anchor="middle" class="node-desc">sqlite3 stdlib, no ORM</text>
+
+    <line x1="430" y1="434" x2="430" y2="488" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- nba.db cylinder -->
+    <g style="color:#5fae7c">
+      <path d="M 300 500 A 130 16 0 0 0 560 500 L 560 560 A 130 16 0 0 1 300 560 Z" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+      <ellipse cx="430" cy="500" rx="130" ry="16" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="528" text-anchor="middle" class="node-title">nba.db</text>
+    <text x="430" y="546" text-anchor="middle" class="node-desc">games, player_boxscores tables</text>
+
+    <line x1="430" y1="576" x2="430" y2="628" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="316" y="586" width="228" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="602" text-anchor="middle" class="edge-label">sqlite3 nba.db &lt; clean.sql</text>
+
+    <!-- clean.sql -->
+    <g style="color:#5fae7c">
+      <rect x="230" y="630" width="400" height="70" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="656" text-anchor="middle" class="node-title">clean.sql &#8594; games_clean view</text>
+    <text x="430" y="674" text-anchor="middle" class="node-desc">dedupe (each game is 2 rows), drop playoffs,</text>
+    <text x="430" y="690" text-anchor="middle" class="node-desc">IS_HOME flag from MATCHUP text</text>
+
+    <line x1="430" y1="700" x2="430" y2="752" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="308" y="710" width="244" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="726" text-anchor="middle" class="edge-label">sqlite3 nba.db &lt; features.sql</text>
+
+    <!-- features.sql -->
+    <g style="color:#5fae7c">
+      <rect x="200" y="754" width="460" height="92" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="780" text-anchor="middle" class="node-title">features.sql &#8594; team_game_features view</text>
+    <text x="430" y="798" text-anchor="middle" class="node-desc">window fns: season-to-date top-5 minutes ranking,</text>
+    <text x="430" y="814" text-anchor="middle" class="node-desc">top5_avail_pct &#8212; strictly prior games only, no leakage</text>
+    <text x="430" y="830" text-anchor="middle" class="node-desc">joins player_boxscores_clean &#8596; games_clean</text>
+
+    <line x1="430" y1="846" x2="430" y2="898" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="345" y="856" width="170" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="872" text-anchor="middle" class="edge-label">python features.py</text>
+
+    <!-- features.py -->
+    <g style="color:#5fae7c">
+      <rect x="230" y="900" width="400" height="86" rx="8" fill="#16241c" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="926" text-anchor="middle" class="node-title">features.py (pandas)</text>
+    <text x="430" y="944" text-anchor="middle" class="node-desc">rolling 10-game avgs, rest days, home/away flag,</text>
+    <text x="430" y="960" text-anchor="middle" class="node-desc">season-based split &#8212; never random (B07)</text>
+    <text x="430" y="976" text-anchor="middle" class="node-desc">train 15-16&#8594;21-22 / val 22-23 / test 23-24&#8594;24-25</text>
+
+    <line x1="430" y1="986" x2="430" y2="1038" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- features.csv -->
+    <g style="color:#5fae7c">
+      <rect x="250" y="1040" width="360" height="70" rx="8" fill="#16241c" stroke="currentColor" stroke-width="2"/>
+    </g>
+    <text x="430" y="1066" text-anchor="middle" class="node-title">data/processed/features.csv</text>
+    <text x="430" y="1084" text-anchor="middle" class="node-desc">10,616 games &#183; 22 cols &#183; 56.6% home-win rate</text>
+    <text x="430" y="1100" text-anchor="middle" class="node-desc">7,339 train / 1,094 val / 2,183 test</text>
+
+    <line x1="430" y1="1110" x2="430" y2="1162" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="330" y="1120" width="200" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="1136" text-anchor="middle" class="edge-label">python train.py</text>
+
+    <!-- train.py wip -->
+    <g style="color:#d9924a">
+      <rect x="230" y="1164" width="400" height="70" rx="8" fill="#241b12" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="1190" text-anchor="middle" class="node-title">train.py</text>
+    <text x="430" y="1208" text-anchor="middle" class="node-desc">logistic regression baseline, then XGBoost</text>
+    <text x="430" y="1224" text-anchor="middle" class="node-desc">outputs win probability, not just W/L</text>
+
+    <line x1="430" y1="1234" x2="430" y2="1286" stroke="#4a515c" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+    <!-- evaluate.py wip -->
+    <g style="color:#d9924a">
+      <rect x="230" y="1288" width="400" height="70" rx="8" fill="#241b12" stroke="currentColor" stroke-width="1.5"/>
+    </g>
+    <text x="430" y="1314" text-anchor="middle" class="node-title">evaluate.py</text>
+    <text x="430" y="1332" text-anchor="middle" class="node-desc">accuracy, Brier score, log loss vs val set</text>
+    <text x="430" y="1348" text-anchor="middle" class="node-desc">target: Brier &lt; 0.25, beat 58% home baseline</text>
+
+    <line x1="430" y1="1358" x2="430" y2="1410" stroke="#6b727c" stroke-width="1.5" marker-end="url(#arrow)" stroke-dasharray="4 3"/>
+
+    <!-- models -->
+    <g style="color:#6b727c">
+      <rect x="230" y="1412" width="400" height="68" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+    </g>
+    <text x="430" y="1438" text-anchor="middle" class="node-title">models/xgboost_model.pkl</text>
+    <text x="430" y="1456" text-anchor="middle" class="node-desc">+ calibrator.pkl &#8212; isotonic regression (week 4)</text>
+
+    <line x1="430" y1="1480" x2="430" y2="1532" stroke="#6b727c" stroke-width="1.5" marker-end="url(#arrow)" stroke-dasharray="4 3"/>
+
+    <!-- api -->
+    <g style="color:#6b727c">
+      <rect x="230" y="1534" width="400" height="86" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+    </g>
+    <text x="430" y="1560" text-anchor="middle" class="node-title">src/api/main.py</text>
+    <text x="430" y="1578" text-anchor="middle" class="node-desc">FastAPI &#183; POST /predict, GET /health</text>
+    <text x="430" y="1594" text-anchor="middle" class="node-desc">model loaded once at startup (fixes B10)</text>
+    <text x="430" y="1610" text-anchor="middle" class="node-desc">week 6 &#8594; deployed on Railway/Render</text>
+
+    <line x1="430" y1="1620" x2="430" y2="1672" stroke="#6b727c" stroke-width="1.5" marker-end="url(#arrow)" stroke-dasharray="4 3"/>
+    <rect x="300" y="1630" width="260" height="24" fill="#1f242c" rx="4"/>
+    <text x="430" y="1646" text-anchor="middle" class="edge-label">POST /predict {home,away,date}</text>
+
+    <!-- frontend -->
+    <g style="color:#6b727c">
+      <rect x="230" y="1674" width="400" height="86" rx="8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+    </g>
+    <text x="430" y="1700" text-anchor="middle" class="node-title">frontend/ (Next.js)</text>
+    <text x="430" y="1718" text-anchor="middle" class="node-desc">GameCard &#8212; matchup + win probability</text>
+    <text x="430" y="1734" text-anchor="middle" class="node-desc">CalibrationChart &#8212; reliability diagram</text>
+    <text x="430" y="1750" text-anchor="middle" class="node-desc">week 7 &#8594; deployed on Vercel</text>
+
+  </g>
+</svg>
