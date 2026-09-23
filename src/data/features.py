@@ -1,23 +1,28 @@
-"""Engineer matchup features from cleaned game data.
+"""Engineer matchup features from the SQLite feature views.
 
-Input  : data/processed/games_clean.csv (one row per team per game)
-Output : data/processed/features.csv      (one row per game = one matchup)
+Input  : data/db/nba.db, view `team_game_features` (one row per team per game,
+         built by clean.sql + features.sql: dedup, home/away, player-availability)
+Output : data/processed/features.csv (one row per game = one matchup)
 
 Each output row describes a single game with each team's form measured strictly
 *before* that game (no leakage, Bug B07): rolling 10-game averages, rest days,
-and a home/away framing. Target is HOME_WIN. A SPLIT column assigns each game to
-train/val/test by season so the modeling step never splits randomly.
+player-top5-availability, and a home/away framing. Target is HOME_WIN. A SPLIT
+column assigns each game to train/val/test by season so the modeling step never
+splits randomly.
 
 Run:
-    python features.py
+    sqlite3 data/db/nba.db < src/data/clean.sql
+    sqlite3 data/db/nba.db < src/data/features.sql
+    python src/data/features.py
 """
 
 import logging
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
-CLEAN_PATH = Path("data/processed/games_clean.csv")
+DB_PATH = Path("data/db/nba.db")
 FEATURES_PATH = Path("data/processed/features.csv")
 
 # Box-score stats we average over a rolling window per team.
@@ -33,12 +38,19 @@ TEST_SEASONS = {2023, 2024}        # 2023-24 .. 2024-25
 logger = logging.getLogger(__name__)
 
 
-def load_clean(path: Path = CLEAN_PATH) -> pd.DataFrame:
-    """Load cleaned per-team game rows. Raises FileNotFoundError if missing."""
-    logger.info("Loading clean data from %s", path)
-    if not path.exists():
-        raise FileNotFoundError(f"Expected clean data at {path}; run clean.py first.")
-    df = pd.read_csv(path, dtype={"GAME_ID": str, "SEASON_ID": str}, parse_dates=["GAME_DATE"])
+def load_clean(db_path: Path = DB_PATH) -> pd.DataFrame:
+    """Load the team_game_features view (games_clean + player availability).
+
+    Raises FileNotFoundError if the database is missing, sqlite3.OperationalError
+    if the view hasn't been created yet (run clean.sql then features.sql first).
+    """
+    logger.info("Loading team_game_features from %s", db_path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"Expected database at {db_path}; run load_db.py first.")
+    with sqlite3.connect(db_path) as conn:
+        df = pd.read_sql_query("SELECT * FROM team_game_features", conn)
+    df = df.rename(columns={c: c.upper() for c in df.columns})
+    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
     return df.sort_values(["TEAM_ABBREVIATION", "GAME_DATE", "GAME_ID"]).reset_index(drop=True)
 
 
@@ -73,7 +85,10 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_matchups(df: pd.DataFrame) -> pd.DataFrame:
     """Pivot two team-rows per game into one matchup row (home vs away)."""
-    feature_cols = ["REST_DAYS"] + [f"ROLL_{s}" for s in ROLLING_STATS]
+    # TOP5_AVAIL_PCT is not shifted like the rolling stats: it already describes
+    # only this game (were the team's rotation players available tonight), so
+    # using it as-is is not leakage the way a same-game box score stat would be.
+    feature_cols = ["REST_DAYS", "TOP5_AVAIL_PCT"] + [f"ROLL_{s}" for s in ROLLING_STATS]
     keep = ["GAME_ID", "GAME_DATE", "SEASON", "SEASON_TYPE", "TEAM_ABBREVIATION", "WL"] + feature_cols
 
     home = df[df["IS_HOME"] == 1][keep].copy()
@@ -119,7 +134,10 @@ def engineer(df: pd.DataFrame) -> pd.DataFrame:
     df = add_rolling_features(df)
     matchups = build_matchups(df)
 
-    feature_cols = [c for c in matchups.columns if c.startswith(("HOME_ROLL", "AWAY_ROLL", "HOME_REST", "AWAY_REST"))]
+    feature_cols = [
+        c for c in matchups.columns
+        if c.startswith(("HOME_ROLL", "AWAY_ROLL", "HOME_REST", "AWAY_REST", "HOME_TOP5", "AWAY_TOP5"))
+    ]
     before = len(matchups)
     matchups = matchups.dropna(subset=feature_cols).copy()  # B04: incomplete windows
     logger.info("Dropped %d matchups with incomplete feature windows", before - len(matchups))

@@ -204,22 +204,26 @@ This is the concrete SQL story: real joins and aggregations, not just a
 
 **Exit criteria:** `nba.db` exists with populated `games` and `player_boxscores` tables. `clean.sql` runs and produces a deduplicated, one-row-per-team-game view with no nulls in key columns.
 
-### Week 2 — Feature Engineering
+### Week 2 — Feature Engineering ✅ DONE
 
-- [ ] Write `features.sql` — the SQL side of feature engineering:
-  - Join `player_boxscores` to `games` to compute team-level player-availability aggregates (e.g. were the team's top-5 minutes players available this game)
-  - Produce one row per team-game with the raw columns needed for rolling calculations
-- [ ] Write `features.py` — pandas side, reading `features.sql`'s output:
+- [x] Write `features.sql` — the SQL side of feature engineering:
+  - `player_boxscores_clean` joins player box scores to `games_clean` (on game_id + team_id, stable across relocations — Bug B11)
+  - `player_prior_avg_min` / `team_top5_players`: window functions ranking each team's rotation players by season-to-date average minutes, strictly before the current game (no leakage)
+  - `team_top5_availability` / `team_game_features`: what fraction of a team's top-5 rotation players actually played this game (`top5_avail_pct`) — NULL for a team's first few games each season (no prior history yet), same shape as Bug B04
+- [x] Write `features.py` — pandas side, reading `team_game_features` from `nba.db`:
   - Rolling 10-game averages per team (PTS, REB, AST, FG_PCT, PLUS_MINUS)
   - Rest days feature (days since last game per team)
+  - `TOP5_AVAIL_PCT` folded in as-is (not shifted — it already describes only the current game, so using it directly isn't leakage the way a same-game box score stat would be)
   - Home/away binary flag
   - Season-based train/val/test split:
     - Train: 2015-16 to 2021-22
     - Val: 2022-23
     - Test: 2023-24 to 2024-25
-- [ ] **NEVER random split across games — this causes data leakage**
+- [x] **NEVER random split across games — this causes data leakage**
 
 **Exit criteria:** `features.csv` exists, includes player-availability features. Train/val/test row counts verified. No future data leaks into training set. You can explain in plain English what each SQL query does and why it's in SQL rather than pandas (or vice versa).
+
+**Result:** 10,616 games (2,450 dropped for incomplete rolling/availability windows, 1,090 dropped for seasons outside train/val/test). Split: 7,339 train / 1,094 val / 2,183 test. Home win rate 56.6% — consistent with the commonly cited ~58% home-court baseline, a reasonable sanity check that cleaning/pivoting didn't introduce bias.
 
 ### Week 3 — Baseline Model
 
@@ -522,5 +526,5 @@ If you're coming back after a break, do this in order:
 ---
 
 _Last updated: September 2026_
-_Current status: Re-planned to add SQLite (raw SQL, no ORM) as the storage/query layer and bring player box-score data into v1 scope. Week 1 in progress under the new architecture._
-_Next action: Write `schema.sql` and `load_db.py` to get `games_raw.csv`/`games_current.csv` into `data/db/nba.db`._
+_Current status: Week 1 (SQL storage layer) and Week 2 (feature engineering, incl. player-availability) complete. `features.csv` built: 10,616 games, 22 columns._
+_Next action: Week 3 — write `train.py` (logistic regression baseline, then XGBoost) and `evaluate.py`._
