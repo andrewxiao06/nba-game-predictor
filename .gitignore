@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 .env
 .venv/
-data/
+/data/
 models/
+.specstory/
+.vscode/
