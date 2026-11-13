@@ -65,8 +65,8 @@ nba-game-predictor/
 │
 ├── data/
 │   ├── raw/
-│   │   ├── games_raw.csv          # Historical team-game rows 2015-16 to 2024-25
-│   │   ├── games_current.csv      # Current season 2025-26 (prediction input)
+│   │   ├── games_raw.csv          # Historical team-game rows 2015-16 to 2025-26
+│   │   ├── games_current.csv      # Current season 2026-27 (prediction input)
 │   │   └── player_boxscores_raw.csv  # Historical player-game box scores
 │   ├── db/
 │   │   └── nba.db                 # SQLite database — raw + cleaned tables live here
@@ -227,13 +227,17 @@ This is the concrete SQL story: real joins and aggregations, not just a
 
 ### Week 3 — Baseline Model
 
-- [ ] Write `train.py`
-- [ ] Logistic regression baseline first (sets the floor)
-- [ ] XGBoost model second
-- [ ] Output: win probability per game, not just W/L classification
-- [ ] Write `evaluate.py`
-- [ ] Accuracy, Brier score, log loss on val set
-- [ ] Compare vs naive baseline (always predict home team wins ~58% of the time)
+- [x] Write `train.py`
+- [x] Logistic regression baseline first (sets the floor)
+- [x] XGBoost model second (shallow config `max_depth=1`, selected on val log loss)
+- [x] Output: win probability per game, not just W/L classification
+- [x] Write `evaluate.py`
+- [x] Accuracy, Brier score, log loss (on test; val is used to fit the calibrator)
+- [x] Compare vs naive baseline (always predict home team wins ~58% of the time)
+- [x] Write `predict.py` — win probability for an upcoming matchup (`--home --away --date`); features verified identical to training
+- [x] Write `visualize.py` — decision boundary, calibration curve, coefficients → `plots/`
+
+**Result (test, 2,603 games, after B16 fix):** uncalibrated LR 65.5% acc / 0.216 Brier / 0.620 log loss; tuned XGBoost 65.7% / 0.217 / 0.623; naive home baseline 54.8% / 0.248 / 0.690. With availability unknown pre-game, LR is 64.9%. Isotonic calibration made LR slightly worse on all three metrics, so `predict.py` uses the uncalibrated model. Open: `evaluate.py` still reports LR through the calibrator.
 
 **Exit criteria:** XGBoost Brier score < 0.25 on val set. Model saved to `models/xgboost_model.pkl`.
 
@@ -349,6 +353,9 @@ These are confirmed issues you will hit. Read before starting each phase.
 | B06 | Current season (2025-26) only has completed games                | Tonight's game won't be in the data                               | Re-run `fetch_current.py` before each prediction session                    |
 | B12 | SQLite writes lock the whole DB file (no row-level locking)      | Concurrent `load_db.py` + query scripts can fail with "database is locked" | Run data loading and querying steps sequentially, never in parallel processes |
 | B13 | `games_current.csv` is fetched once and goes stale (e.g. only had Finals Game 1 for weeks after the series continued) | Feature/prediction input misses recent games | Rerun `fetch_current.py` + `fetch_players_current.py` before each prediction session, not just once |
+| B15 | Season-scoped rolling windows made early-season games unpredictable (first 10 games/team dropped in training; `predict.py` couldn't predict them) | ~2,450 training games dropped; no predictions possible for the first ~3 weeks of each season | FIXED: rolling windows and rest days now span season boundaries (rest capped at 7 days). Recovered 1,822 games (12,438 total). Early-season test accuracy 64.2% vs 64.9% rest-of-season, so stale prior-season form costs little. |
+| B16 | `top5_avail_pct` was ~always 1.0: `player_boxscores` has no rows for players who sat out, and the old SQL picked the top 5 from *this game's* box score, so absent players were invisible (only 16 of ~30k team-games below 1.0) | Availability feature carried no signal (weight ≈ 0) | FIXED: top 5 now ranked from the team's *prior* games this season (minutes per game played), excluding players who've since joined another team. 57% of team-games now show an absence. Test LR: 64.8% → 65.5% acc, Brier 0.220 → 0.216. Caveat: the gain needs real pre-game availability; with availability unknown (assumed 1.0) it's 64.9%. `features.sql` now takes ~3 min. |
+| B17 | Bumping `fetch_current.py` from 2025-26 to 2026-27 overwrote `games_current.csv`, and the historical fetchers stopped at 2024-25, so the entire 2025-26 season vanished from the DB | Early-2026-27 predictions padded their 10-game window with spring 2025 games instead of spring 2026 | FIXED: added 2025-26 to `fetch_games.py`/`fetch_players.py` and re-fetched. Prevention: when a new season starts, add the finished season to both historical lists *before* bumping the current-season fetchers. Model metrics unchanged (2025-26 isn't in any train/val/test split). |
 | B14 | `player_boxscores` has no `STARTER`/lineup flag — `LeagueGameLog` doesn't return one, and getting it needs a boxscore call per game (~13k+ requests) | "Was this team's top player available" can only be approximated from `MIN`, not a real starter/injury signal | Documented scope decision for v1: infer availability from `MIN` (0/NULL = did not play). Revisit if this proves too noisy. |
 
 ### Model Layer
@@ -526,5 +533,5 @@ If you're coming back after a break, do this in order:
 ---
 
 _Last updated: September 2026_
-_Current status: Week 1 (SQL storage layer) and Week 2 (feature engineering, incl. player-availability) complete. `features.csv` built: 10,616 games, 22 columns._
-_Next action: Week 3 — write `train.py` (logistic regression baseline, then XGBoost) and `evaluate.py`._
+_Current status: Weeks 1–3 complete, plus `predict.py`. `features.csv`: 12,438 games, 24 columns (incl. ROLL_WIN_PCT). Current season data is 2026-27._
+_Next action: Vegas backtest (waiting on odds CSV), then FastAPI `/predict` wrapping `predict.py`._

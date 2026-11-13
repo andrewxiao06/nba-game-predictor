@@ -55,9 +55,22 @@ def train_logistic_regression(X_train: pd.DataFrame, y_train: pd.Series) -> Logi
     return model
 
 def train_xgboost(X_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
-    """fit xgboost (no scaling needed - tree models dont care about feature scale)."""
+    """fit xgboost (no scaling needed - tree models dont care about feature scale).
+
+    Shallow/conservative hyperparameters, not XGBoost defaults: with ~7.3k train
+    rows and 14 features, the default max_depth=6 overfits badly (test log loss
+    0.736 vs. 0.630 here). Picked via a small manual sweep over max_depth/
+    n_estimators/learning_rate, selected on val log loss (not test -- test is
+    only touched once, afterward, to confirm), not a proper CV grid search.
+    """
     logger.info("Training XGBoost model")
-    model = XGBClassifier(eval_metric="logloss", random_state=42)
+    model = XGBClassifier(
+        eval_metric="logloss",
+        random_state=42,
+        max_depth=1,
+        n_estimators=200,
+        learning_rate=0.1,
+    )
     model.fit(X_train, y_train)
     return model
 
