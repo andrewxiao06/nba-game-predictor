@@ -1,4 +1,4 @@
-"""Fetch historical NBA games (2015-16 through 2024-25) into games_raw.csv.
+"""Fetch historical NBA games (2015-16 through 2025-26) into games_raw.csv.
 
 One LeagueGameFinder call per season, with a sleep between calls to respect
 nba_api rate limits (Bug B03). Each season returns two rows per game (one per
@@ -13,8 +13,10 @@ import time
 import pandas as pd
 from nba_api.stats.endpoints import leaguegamefinder
 
-# Historical training range. Current season (2025-26) is fetched separately by
-# fetch_current.py into games_current.csv.
+# Every completed season. The in-progress season is fetched separately by
+# fetch_current.py into games_current.csv. When a new season starts, add the
+# season that just finished here BEFORE bumping fetch_current.py, or it drops
+# out of the data entirely (Bug B17).
 SEASONS = [
     "2015-16",
     "2016-17",
@@ -26,6 +28,7 @@ SEASONS = [
     "2022-23",
     "2023-24",
     "2024-25",
+    "2025-26",
 ]
 
 OUTPUT_PATH = "data/raw/games_raw.csv"

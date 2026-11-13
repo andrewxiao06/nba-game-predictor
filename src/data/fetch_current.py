@@ -13,7 +13,7 @@ import time
 import pandas as pd
 from nba_api.stats.endpoints import leaguegamefinder
 
-SEASONS = ["2025-26"]
+SEASONS = ["2026-27"]
 OUTPUT_PATH = "data/raw/games_current.csv"
 
 

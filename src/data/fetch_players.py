@@ -33,6 +33,7 @@ SEASONS = [
     "2022-23",
     "2023-24",
     "2024-25",
+    "2025-26",  # keep in sync with fetch_games.py (Bug B17)
 ]
 
 SEASON_TYPES = [

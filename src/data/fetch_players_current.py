@@ -10,7 +10,7 @@ Run:
 
 from fetch_players import fetch_all, SEASON_TYPES
 
-SEASONS = ["2025-26"]
+SEASONS = ["2026-27"]
 OUTPUT_PATH = "data/raw/player_boxscores_current.csv"
 
 

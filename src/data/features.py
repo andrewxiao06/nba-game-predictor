@@ -28,6 +28,7 @@ FEATURES_PATH = Path("data/processed/features.csv")
 # Box-score stats we average over a rolling window per team.
 ROLLING_STATS = ["PTS", "REB", "AST", "FG_PCT", "PLUS_MINUS"]
 ROLLING_WINDOW = 10
+MAX_REST_DAYS = 7
 
 # Season-based split (Bug B07: never split randomly across games). SEASON is the
 # starting year, e.g. 2021 == the 2021-22 season.
@@ -55,31 +56,39 @@ def load_clean(db_path: Path = DB_PATH) -> pd.DataFrame:
 
 
 def add_rest_days(df: pd.DataFrame) -> pd.DataFrame:
-    """Add REST_DAYS: days since this team's previous game in the same season.
+    """Add REST_DAYS: days since this team's previous game, capped at MAX_REST_DAYS.
 
-    Rest is physical, so it spans game types within a season. The first game of
-    a team's season has no prior game and is left as NaN (dropped downstream).
+    Spans season boundaries so a season opener still gets a value. The cap keeps
+    the ~4-month offseason gap from becoming a huge outlier for a linear model;
+    beyond a week, a team is simply "fully rested."
     """
     df = df.copy()
-    prev_date = df.groupby(["TEAM_ABBREVIATION", "SEASON"])["GAME_DATE"].shift(1)
-    df["REST_DAYS"] = (df["GAME_DATE"] - prev_date).dt.days
+    prev_date = df.groupby("TEAM_ABBREVIATION")["GAME_DATE"].shift(1)
+    df["REST_DAYS"] = (df["GAME_DATE"] - prev_date).dt.days.clip(upper=MAX_REST_DAYS)
     return df
 
 
 def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add ROLL_<stat>: mean of the prior ROLLING_WINDOW games for that team.
 
-    Computed per (SEASON, SEASON_TYPE, team) so playoff and regular-season form
-    don't bleed together (Bug B02), and shifted by one game so the current game
-    is never included (Bug B07). Requires a full window; partial windows are NaN
-    and dropped later (Bug B04).
+    Computed over each team's continuous game history, crossing season and
+    playoff boundaries, so early-season games use last season's trailing form
+    instead of being dropped (Bug B15). Shifted by one game so the current game
+    is never included (Bug B07). Requires a full window (Bug B04).
     """
     df = df.copy()
-    grp = df.groupby(["SEASON", "SEASON_TYPE", "TEAM_ABBREVIATION"])
+    df["WIN"] = (df["WL"] == "W").astype(int)
+    grp = df.groupby("TEAM_ABBREVIATION")
     for stat in ROLLING_STATS:
         df[f"ROLL_{stat}"] = grp[stat].transform(
             lambda s: s.shift(1).rolling(ROLLING_WINDOW, min_periods=ROLLING_WINDOW).mean()
         )
+    # Win/loss record wasn't fed to the model at all before this -- box-score
+    # averages (PLUS_MINUS etc.) are correlated with winning but aren't the
+    # same signal as "this team has actually won 8 of its last 10."
+    df["ROLL_WIN_PCT"] = grp["WIN"].transform(
+        lambda s: s.shift(1).rolling(ROLLING_WINDOW, min_periods=ROLLING_WINDOW).mean()
+    )
     return df
 
 
@@ -88,7 +97,7 @@ def build_matchups(df: pd.DataFrame) -> pd.DataFrame:
     # TOP5_AVAIL_PCT is not shifted like the rolling stats: it already describes
     # only this game (were the team's rotation players available tonight), so
     # using it as-is is not leakage the way a same-game box score stat would be.
-    feature_cols = ["REST_DAYS", "TOP5_AVAIL_PCT"] + [f"ROLL_{s}" for s in ROLLING_STATS]
+    feature_cols = ["REST_DAYS", "TOP5_AVAIL_PCT", "ROLL_WIN_PCT"] + [f"ROLL_{s}" for s in ROLLING_STATS]
     keep = ["GAME_ID", "GAME_DATE", "SEASON", "SEASON_TYPE", "TEAM_ABBREVIATION", "WL"] + feature_cols
 
     home = df[df["IS_HOME"] == 1][keep].copy()
